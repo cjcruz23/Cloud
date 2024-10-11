@@ -127,15 +127,19 @@ resource "aws_key_pair" "cloud2" {
 resource "aws_instance" "CarlosJ" {
   ami           = data.aws_ami.ubuntu.id
   instance_type = "t3.micro"
-  subnet_id = aws_subnet.public_subnet_1.id
-  key_name = aws_key_pair.cloud2.key_name
-  user_data = file("comandos.sh")
-  associate_public_ip_address = true
-
-  # Seguridad de la instancia (acceso solo por SSH - puerto 22)
+  subnet_id     = aws_subnet.public_subnet_1.id
+  key_name      = aws_key_pair.cloud2.key_name
   vpc_security_group_ids = [aws_security_group.instance_sg.id]
-  
-  tags = {
+  associate_public_ip_address = true
+  user_data = <<-EOF
+    #!/bin/bash
+    sudo apt-get update -y
+    sudo apt-get install -y nginx
+    sudo systemctl start nginx
+    echo "<html><h1>Carlos 1</h1></html>" > /var/www/html/index.html
+  EOF
+
+    tags = {
     Name = "CarlosJ"
   }
 }
@@ -146,12 +150,15 @@ resource "aws_instance" "CarlosJ2" {
   instance_type = "t3.micro"
   subnet_id = aws_subnet.public_subnet_2.id
   key_name = aws_key_pair.cloud2.key_name
-  user_data = file("comandos.sh")
   associate_public_ip_address = true
-
-    # Seguridad de la instancia (acceso solo por SSH - puerto 22)
   vpc_security_group_ids = [aws_security_group.instance_sg.id]
-  
+  user_data = <<-EOF
+    #!/bin/bash
+    sudo apt-get update -y
+    sudo apt-get install -y nginx
+    sudo systemctl start nginx
+    echo "<html><h1>Carlos 2</h1></html>" > /var/www/html/index.html
+  EOF
 
   tags = {
     Name = "CarlosJ2"
@@ -190,6 +197,103 @@ resource "aws_security_group" "instance_sg" {
   tags = {
     Name = "instance-sg"
   }
+}
+
+# Crear un Load Balancer (ALB)
+resource "aws_lb" "app_lb" {
+  name               = "app-lb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.instance_sg.id]
+  subnets            = [aws_subnet.public_subnet_1.id, aws_subnet.public_subnet_2.id]
+
+  tags = {
+    Name = "app_lb"
+  }
+}
+
+# Crear un target group para las instancias EC2
+resource "aws_lb_target_group" "app_tg" {
+  name     = "app-tg"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.cloud_vpc.id
+
+   health_check {
+    path = "/"
+    protocol = "HTTP"
+    interval = 5      
+    timeout  = 2
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+  }
+
+  tags = {
+    Name = "app_tg"
+  }
+}
+
+# Asignar las instancias EC2 al target group
+resource "aws_lb_target_group_attachment" "ec2_attachment_1" {
+  target_group_arn = aws_lb_target_group.app_tg.arn
+  target_id        = aws_instance.CarlosJ.id
+  port             = 80
+}
+
+resource "aws_lb_target_group_attachment" "ec2_attachment_2" {
+  target_group_arn = aws_lb_target_group.app_tg.arn
+  target_id        = aws_instance.CarlosJ2.id
+  port             = 80
+}
+
+# Crear un listener para el ALB
+resource "aws_lb_listener" "app_listener" {
+  load_balancer_arn = aws_lb.app_lb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app_tg.arn
+  }
+
+  tags = {
+    Name = "app_listener"
+  }
+}
+
+# Crear un grupo de subredes para RDS
+resource "aws_db_subnet_group" "subredes" {
+  name       = "cloudsubredes"
+  subnet_ids = [aws_subnet.public_subnet_1.id, aws_subnet.public_subnet_2.id]
+
+  tags = {
+    Name = "cloudsubredes"
+  }
+}
+
+# Crear una base de datos RDS MySQL
+resource "aws_db_instance" "app_db" {
+  identifier        = "app-db-instance"
+  allocated_storage = 20
+  engine            = "mysql"
+  engine_version    = "8.0"
+  instance_class    = "db.t3.micro"
+  db_name              = "cloud2024"
+  username          = "admin"
+  password          = "Admin2024"
+  db_subnet_group_name = aws_db_subnet_group.subredes.name
+  vpc_security_group_ids = [aws_security_group.instance_sg.id]
+
+  skip_final_snapshot = true
+
+  tags = {
+    Name = "app_db"
+  }
+}
+
+output "alb_dns_name" {
+  value = aws_lb.app_lb.dns_name
 }
 
 
